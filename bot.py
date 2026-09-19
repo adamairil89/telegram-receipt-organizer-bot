@@ -28,6 +28,27 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
 
+# --- Background Health Server for Render ---
+def run_dummy_server():
+    port = int(os.getenv("PORT", 10000))
+
+    class HealthHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot is alive!")
+
+        def log_message(self, format, *args):
+            return  # Prevents terminal log spam on every ping
+
+    with socketserver.TCPServer(("", port), HealthHandler) as httpd:
+        httpd.serve_forever()
+
+
+# Launch dummy web server on daemon thread
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
 # --- Minimal Health-Check Server for Render ---
 def run_health_server():
     port = int(os.getenv("PORT", 10000))
