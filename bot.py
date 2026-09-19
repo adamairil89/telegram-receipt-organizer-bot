@@ -320,8 +320,13 @@ async def finalize_receipt(
   cat = context.user_data.get("category", "General")
   merch = context.user_data.get("merchant", "General")
   uploader = context.user_data.get("uploader", "Family Member")
-  photo_id = context.user_data.get("photo_id")
+
+  # Check both keys so it never ends up None
+  media_id = context.user_data.get("file_id") or context.user_data.get(
+      "photo_id"
+  )
   file_type = context.user_data.get("file_type", "photo")
+
   amount_str = context.user_data.get("amount_str", "RM 0.00")
   amount_tag = context.user_data.get("amount_tag", "rm0")
   date_display = context.user_data.get("date_display", "N/A")
@@ -331,7 +336,6 @@ async def finalize_receipt(
   clean_merch_tag = "".join(filter(str.isalnum, merch.lower()))
   clean_cat_tag = cat.lower()
 
-  # Build caption lines
   caption_lines = [
       f"🧾 *{merch}* ({amount_str})",
       f"📅 Date: {date_display}",
@@ -348,19 +352,20 @@ async def finalize_receipt(
 
   target_thread = TOPIC_IDS.get(cat)
 
-  if file_type == "photo":
-    await context.bot.send_photo(
+  # Check file type and send with the verified media_id
+  if file_type == "document":
+    await context.bot.send_document(
         chat_id=GROUP_CHAT_ID,
         message_thread_id=target_thread,
-        photo=photo_id,
+        document=media_id,
         caption=caption_text,
         parse_mode="Markdown",
     )
   else:
-    await context.bot.send_document(
+    await context.bot.send_photo(
         chat_id=GROUP_CHAT_ID,
         message_thread_id=target_thread,
-        document=photo_id,
+        photo=media_id,
         caption=caption_text,
         parse_mode="Markdown",
     )
