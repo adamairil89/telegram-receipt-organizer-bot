@@ -84,7 +84,7 @@ MERCHANT_OPTIONS = {
 }
 
 # Conversation States
-CATEGORY, MERCHANT, CUSTOM_MERCHANT, AMOUNT, DATE_CHOICE, CUSTOM_DATE = range(6)
+CATEGORY, MERCHANT, CUSTOM_MERCHANT, AMOUNT, DATE_CHOICE, CUSTOM_DATE, REMARK = range(7)
 
 
 async def receipt_entry(
@@ -223,114 +223,157 @@ async def amount_received(
     return DATE_CHOICE
 
 
+async def ask_remark(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+  """Prompts user for an optional remark."""
+  keyboard = [
+      [InlineKeyboardButton("⏭️ Skip Remark", callback_data="skip_remark")],
+      [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
+
+  text = "Any remark or note for this receipt? (Send text note, or tap Skip):"
+
+  # Works whether update came from a button click or a text reply
+  if update.callback_query:
+    await update.callback_query.edit_message_text(
+        text, reply_markup=reply_markup
+    )
+  else:
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+  return REMARK
+
+
 async def date_choice_picked(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Handles choosing today vs manual date."""
-    query = update.callback_query
-    await query.answer()
+  query = update.callback_query
+  await query.answer()
 
-    if query.data == "cancel":
-        await query.edit_message_text("Receipt processing cancelled.")
-        return ConversationHandler.END
+  if query.data == "cancel":
+    await query.edit_message_text("Receipt processing cancelled.")
+    return ConversationHandler.END
 
-    if query.data == "date_today":
-        today = datetime.datetime.now()
-        date_display = today.strftime("%d %b %Y")
-        month_tag = today.strftime("%b%Y").lower()
-        await query.edit_message_text(f"Using date: {date_display}")
-        return await finalize_receipt(update, context, date_display, month_tag)
+  if query.data == "date_today":
+    today = datetime.datetime.now()
+    context.user_data["date_display"] = today.strftime("%d %b %Y")
+    context.user_data["month_tag"] = today.strftime("%b%Y").lower()
+    return await ask_remark(update, context)
 
-    # User picked custom date
-    await query.edit_message_text(
-        "Please type the receipt date (e.g. `12/09/2026` or `12 Sep 2026`):",
-        parse_mode="Markdown",
-    )
-    return CUSTOM_DATE
+  # User picked custom date
+  await query.edit_message_text(
+      "Please type the receipt date (e.g. `12/09/2026` or `12 Sep 2026`):",
+      parse_mode="Markdown",
+  )
+  return CUSTOM_DATE
 
 
 async def custom_date_received(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Parses custom typed date."""
-    raw_date = update.message.text.strip()
-    parsed_date = None
+  raw_date = update.message.text.strip()
+  parsed_date = None
 
-    # Common date formats to try
-    formats = ["%d/%m/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d"]
-    for fmt in formats:
-        try:
-            parsed_date = datetime.datetime.strptime(raw_date, fmt)
-            break
-        except ValueError:
-            continue
+  formats = ["%d/%m/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d"]
+  for fmt in formats:
+    try:
+      parsed_date = datetime.datetime.strptime(raw_date, fmt)
+      break
+    except ValueError:
+      continue
 
-    if parsed_date:
-        date_display = parsed_date.strftime("%d %b %Y")
-        month_tag = parsed_date.strftime("%b%Y").lower()
-    else:
-        # Fallback if text format cannot be strictly parsed
-        date_display = raw_date
-        month_tag = "receipt"
+  if parsed_date:
+    context.user_data["date_display"] = parsed_date.strftime("%d %b %Y")
+    context.user_data["month_tag"] = parsed_date.strftime("%b%Y").lower()
+  else:
+    context.user_data["date_display"] = raw_date
+    context.user_data["month_tag"] = "receipt"
 
-    return await finalize_receipt(update, context, date_display, month_tag)
+  return await ask_remark(update, context)
+
+async def remark_received(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+  """User types a text note."""
+  context.user_data["remark"] = update.message.text.strip()
+  return await finalize_receipt(update, context)
+
+
+async def remark_skipped(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+  """User taps Skip."""
+  query = update.callback_query
+  await query.answer()
+
+  if query.data == "cancel":
+    await query.edit_message_text("Receipt processing cancelled.")
+    return ConversationHandler.END
+
+  context.user_data["remark"] = None
+  return await finalize_receipt(update, context)
 
 
 async def finalize_receipt(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    date_display: str,
-    month_tag: str,
+    update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Builds caption and posts to target topic."""
-    cat = context.user_data.get("category", "General")
-    merch = context.user_data.get("merchant", "General")
-    uploader = context.user_data.get("uploader", "Family Member")
-    photo_id = context.user_data.get("photo_id")
-    amount_str = context.user_data.get("amount_str", "RM 0.00")
-    amount_tag = context.user_data.get("amount_tag", "rm0")
+  cat = context.user_data.get("category", "General")
+  merch = context.user_data.get("merchant", "General")
+  uploader = context.user_data.get("uploader", "Family Member")
+  photo_id = context.user_data.get("photo_id")
+  file_type = context.user_data.get("file_type", "photo")
+  amount_str = context.user_data.get("amount_str", "RM 0.00")
+  amount_tag = context.user_data.get("amount_tag", "rm0")
+  date_display = context.user_data.get("date_display", "N/A")
+  month_tag = context.user_data.get("month_tag", "receipt")
+  remark = context.user_data.get("remark")
 
-    clean_merch_tag = "".join(filter(str.isalnum, merch.lower()))
-    clean_cat_tag = cat.lower()
+  clean_merch_tag = "".join(filter(str.isalnum, merch.lower()))
+  clean_cat_tag = cat.lower()
 
-    # Formatted caption with Uploaded by
-    caption_text = (
-        f"🧾 *{merch}* ({amount_str})\n"
-        f"📅 Date: {date_display}\n"
-        f"👤 Uploaded by: {uploader}\n\n"
-        f"#{clean_cat_tag} #{clean_merch_tag} #{month_tag} #{amount_tag}"
+  # Build caption lines
+  caption_lines = [
+      f"🧾 *{merch}* ({amount_str})",
+      f"📅 Date: {date_display}",
+      f"👤 Uploaded by: {uploader}",
+  ]
+
+  if remark:
+    caption_lines.append(f"📝 Note: {remark}")
+
+  caption_lines.append(
+      f"\n#{clean_cat_tag} #{clean_merch_tag} #{month_tag} #{amount_tag}"
+  )
+  caption_text = "\n".join(caption_lines)
+
+  target_thread = TOPIC_IDS.get(cat)
+
+  if file_type == "photo":
+    await context.bot.send_photo(
+        chat_id=GROUP_CHAT_ID,
+        message_thread_id=target_thread,
+        photo=photo_id,
+        caption=caption_text,
+        parse_mode="Markdown",
     )
-
-    target_thread = TOPIC_IDS.get(cat)
-    file_type = context.user_data.get("file_type")
-    file_id = context.user_data.get("file_id")
-
-    if file_type == "photo":
-        await context.bot.send_photo(
-            chat_id=GROUP_CHAT_ID,
-            message_thread_id=target_thread,
-            photo=file_id,
-            caption=caption_text,
-            parse_mode="Markdown",
-        )
-    elif file_type == "document":
-        await context.bot.send_document(
-            chat_id=GROUP_CHAT_ID,
-            message_thread_id=target_thread,
-            document=file_id,
-            caption=caption_text,
-            parse_mode="Markdown",
-        )
-
-    chat_target = update.effective_chat.id
-    await context.bot.send_message(
-        chat_id=chat_target,
-        text=f"✅ Saved to *{cat}* topic!",
+  else:
+    await context.bot.send_document(
+        chat_id=GROUP_CHAT_ID,
+        message_thread_id=target_thread,
+        document=photo_id,
+        caption=caption_text,
         parse_mode="Markdown",
     )
 
-    context.user_data.clear()
-    return ConversationHandler.END
+  chat_target = update.effective_chat.id
+  await context.bot.send_message(
+      chat_id=chat_target,
+      text=f"✅ Saved to *{cat}* topic!",
+      parse_mode="Markdown",
+  )
+
+  context.user_data.clear()
+  return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -361,6 +404,12 @@ def main():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND, custom_date_received
                 )
+            ],
+            REMARK: [
+                CallbackQueryHandler(remark_skipped),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, remark_received
+                ),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
